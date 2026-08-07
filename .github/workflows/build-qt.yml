@@ -118,7 +118,7 @@ jobs:
             -WorkDir "${{ runner.temp }}\qt" `
             -DistDir "dist"
 
-      # 8. 上传构建产物 (Artifact)
+      # 8. 上传构建产物 (Artifact) —— 发布由下方独立的 release job 汇总
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -126,12 +126,30 @@ jobs:
           path: dist/*.7z
           if-no-files-found: error
 
-      # 9. 幂等清理: 同名 tag/Release 已存在时先删除, 保证同一版本可重复构建发布
+  # ===========================================================================
+  # release —— 汇总两个工具链的包, 在同一个 tag 下发布 (一个版本一个 Release)
+  # ===========================================================================
+  release:
+    name: 发布 Qt ${{ env.QT_VERSION }} (一个 tag 汇总两个工具链)
+    needs: build-windows
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # 1. 下载两个工具链构建的全部产物 (合并到 artifacts/)
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: Qt-*
+          path: artifacts
+          merge-multiple: true
+
+      # 2. 幂等清理: 同名 tag/Release 已存在时先删除, 保证同一版本可重复发布
       - name: Cleanup same-name release/tag (idempotent re-run)
-        if: ${{ inputs.publish_release }}
         shell: pwsh
         run: |
-          $tag = "Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug"
+          $tag = "Qt-${{ env.QT_VERSION }}-x64-Release-Debug"
           $api = "https://api.github.com/repos/${{ github.repository }}"
           $rel = curl -s -H "Authorization: Bearer ${{ github.token }}" "$api/releases/tags/$tag" | ConvertFrom-Json
           if ($rel.id) {
@@ -144,23 +162,23 @@ jobs:
             Write-Host "已删除同名 Tag: $tag"
           }
 
-      # 10. 发布到 GitHub Releases
-      - name: Publish GitHub Release
-        if: ${{ inputs.publish_release }}
+      # 3. 发布: 一个 tag, 两个工具链的包 + 校验和
+      - name: Publish GitHub Release (single tag)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug
-          name: Qt ${{ env.QT_VERSION }} (${{ matrix.vs_label }} x64, Release + Debug, 开源组件)
+          tag_name: Qt-${{ env.QT_VERSION }}-x64-Release-Debug
+          name: Qt ${{ env.QT_VERSION }} (x64, Release + Debug, 开源组件)
           body: |
             ## 构建信息
             - Qt 版本: ${{ env.QT_VERSION }}
-            - 工具链: ${{ matrix.vs_label }} x64
+            - 工具链: MSVC2022 x64 + MSVC2026 x64 (两个包在同一 tag 下)
             - 配置: shared (动态链接), Release + Debug
             - 组件: qtbase / qttools / qttranslations / qtsvg (仅开源协议组件, LGPL-3.0/GPL-3.0)
             - 构建日期: ${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
             - 提交: ${{ github.sha }}
 
+            包名: Qt-<版本>-msvc2022-x64-Release-Debug.7z / Qt-<版本>-msvc2026-x64-Release-Debug.7z
             详细说明见仓库 README.md。压缩包内附 SHA256 校验和文件。
           files: |
-            dist/*.7z
-            dist/*.txt
+            artifacts/**/*.7z
+            artifacts/**/*.sha256.txt
