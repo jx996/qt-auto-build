@@ -130,7 +130,8 @@ jobs:
   # release —— 汇总两个工具链的包, 在同一个 tag 下发布 (一个版本一个 Release)
   # ===========================================================================
   release:
-    name: 发布 Qt ${{ env.QT_VERSION }} (一个 tag 汇总两个工具链)
+    # 注意: env 上下文不可用于 job 级 name, 用 inputs
+    name: 发布 Qt ${{ inputs.qt_version || '6.8.4' }} (一个 tag 汇总两个工具链)
     needs: build-windows
     if: ${{ inputs.publish_release }}
     runs-on: ubuntu-latest
