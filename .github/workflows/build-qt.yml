@@ -39,7 +39,8 @@ env:
 
 jobs:
   build-windows:
-    name: Qt ${{ env.QT_VERSION }} - ${{ matrix.vs_label }} x64 (Release+Debug)
+    # 注意: env 上下文不可用于 job 级 name 字段, 需用 inputs/matrix 上下文
+    name: Qt ${{ inputs.qt_version || '6.8.4' }} - ${{ matrix.vs_label }} x64 (Release+Debug)
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
