@@ -47,40 +47,65 @@ if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
 
 # ---------- 0.5 Debug 运行时 PATH 补全 ----------
 # 编译 Debug 配置时, rcc/moc/uic 等工具需要 Debug 版 C 运行时 DLL
-# (vcruntime140d.dll / msvcp140d.dll / ucrtbased.dll)。这些 DLL 只存在于
-# VS 工具集 / debug redist / Windows SDK 目录中, 若不在 PATH 上,
-# 工具进程启动即报 0xc0000135 (STATUS_DLL_NOT_FOUND), 表现与已知构建失败一致。
-$runtimeDirs = @()
-foreach ($vsRoot in @('C:\Program Files\Microsoft Visual Studio', 'C:\Program Files (x86)\Microsoft Visual Studio')) {
-    Get-ChildItem $vsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        # MSVC 工具集 bin (含 vcruntime140d.dll / msvcp140d.dll)
-        Get-ChildItem "$($_.FullName)\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $runtimeDirs += "$($_.FullName)\bin\Hostx64\x64"
-        }
-        # debug_nonredist 的 DebugCRT 目录
-        Get-ChildItem "$($_.FullName)\VC\Redist\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            Get-ChildItem "$($_.FullName)\debug_nonredist\x64" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                $runtimeDirs += $_.FullName
-            }
-        }
-    }
+# (vcruntime140d.dll / msvcp140d.dll / ucrtbased.dll)。这些 DLL 只随
+# VS/SDK 分发且默认不在 PATH 上, 缺失时工具进程启动即报 0xc0000135
+# (STATUS_DLL_NOT_FOUND), 表现为 Release 构建正常、Debug 构建失败。
+# 这里在 VS/SDK 安装树内递归定位这些 DLL, 并将其所在目录加入 PATH。
+$need = @('vcruntime140d.dll', 'msvcp140d.dll', 'ucrtbased.dll')
+
+# 1) 确定 VS 安装路径 (优先 vswhere, 兼容非默认安装位置)
+$vsRoots = @('C:\Program Files\Microsoft Visual Studio', 'C:\Program Files (x86)\Microsoft Visual Studio')
+$vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+if (Test-Path $vswhere) {
+    $vsPath = (& $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1)
+    if ($vsPath) { $vsRoots = @($vsPath) + $vsRoots }
 }
-# Windows SDK 的 UCRT Debug 目录 (含 ucrtbased.dll)
+
+$searchRoots = @()
+foreach ($root in $vsRoots) {
+    if (-not (Test-Path $root)) { continue }
+    # 仅搜索与运行时相关的子树, 避免全盘遍历拖慢构建
+    $searchRoots += "$root\VC\Redist"
+    $searchRoots += "$root\VC\Tools\MSVC"
+    $searchRoots += "$root\Common7\IDE\VC\VCTargets"   # 部分组件会把 CRT 放到这里
+}
 foreach ($kitRoot in @('C:\Program Files (x86)\Windows Kits\10\bin', 'C:\Program Files\Windows Kits\10\bin')) {
-    Get-ChildItem $kitRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        $runtimeDirs += "$($_.FullName)\x64\ucrt"
+    if (Test-Path $kitRoot) { $searchRoots += $kitRoot }
+}
+# System32 里也可能存在 (安装了 VS 的机器)
+$searchRoots += 'C:\Windows\System32'
+
+$dllDirs = @()
+foreach ($root in ($searchRoots | Select-Object -Unique)) {
+    if (-not (Test-Path $root)) { continue }
+    Write-Host "搜索 Debug 运行时: $root"
+    foreach ($dll in $need) {
+        $hit = Get-ChildItem -Path $root -Recurse -Filter $dll -File -ErrorAction SilentlyContinue |
+               Select-Object -First 1
+        if ($hit) {
+            $dir = $hit.DirectoryName
+            if ($dllDirs -notcontains $dir) { $dllDirs += $dir }
+            Write-Host "  找到 $dll -> $dir"
+        }
     }
 }
-$runtimeDirs = $runtimeDirs | Select-Object -Unique
-foreach ($d in $runtimeDirs) {
-    if (Test-Path $d) { $env:PATH = "$d;$env:PATH" }
+
+foreach ($d in $dllDirs) { $env:PATH = "$d;$env:PATH" }
+
+# 诊断: 按实际 PATH 解析验证三个 DLL
+$missing = @()
+foreach ($dll in $need) {
+    if (Get-Command $dll -ErrorAction SilentlyContinue) { Write-Host "Debug 运行时 OK: $dll" }
+    else { $missing += $dll }
 }
-# 诊断: 确认 Debug 运行时 DLL 可被解析
-foreach ($dll in @('vcruntime140d.dll', 'msvcp140d.dll', 'ucrtbased.dll')) {
-    $hit = $runtimeDirs | Where-Object { Test-Path (Join-Path $_ $dll) }
-    if ($hit) { Write-Host "Debug 运行时 OK: $dll -> $hit" }
-    else { Write-Warning "未找到 $dll, Debug 构建可能再次报 0xc0000135" }
+if ($missing.Count -gt 0) {
+    Write-Warning "以下 Debug 运行时 DLL 未能加入 PATH: $($missing -join ', ')"
+    Write-Warning "Debug 构建可能再次报 0xc0000135; 请检查上方搜索输出"
 }
+# PATH 统计 (过长 PATH 也可能是 0xc0000135 的诱因之一)
+$pathLen = $env:PATH.Length
+$pathCount = $env:PATH.Split(';').Count
+Write-Host "PATH 诊断: $pathCount 个目录, 总长 $pathLen 字符"
 
 # ---------- 1. 路径定义 ----------
 $srcRoot = Join-Path $WorkDir "$QtVersion\src"
