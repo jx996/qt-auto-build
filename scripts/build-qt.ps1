@@ -9,7 +9,8 @@
 #     cmake/QtProcessConfigureArgs.cmake 的 generator 自动检测逻辑)。
 #   - 其余组件 (qttools/qttranslations/qtsvg) 直接用 CMake 以
 #     "Ninja Multi-Config" + CMAKE_CONFIGURATION_TYPES=Debug;Release 配置。
-#   - 最后按 --config Release / --config Debug 分别构建并安装。
+#   - 最后按 --config Debug / --config Release 分别构建并安装
+#     (Debug 优先: Debug 是 CI 上最容易失败的一环, 先跑可尽早暴露问题)。
 #
 # 依赖:
 #   - 已配置好的 MSVC x64 环境 (本工程由 ilammy/msvc-dev-cmd 提供)
@@ -178,7 +179,7 @@ New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 # ---------- 2. 编译 qtbase ----------
 Write-Host ''
 Write-Host '=========================================================='
-Write-Host '==> [1/4] 编译 qtbase (Release + Debug, shared)'
+Write-Host '==> [1/4] 编译 qtbase (Debug 优先, shared)'
 Write-Host '=========================================================='
 
 $qtbaseBuild = Join-Path $buildRoot 'qtbase'
@@ -209,21 +210,23 @@ try {
     & cmd.exe /c "call `"$configure`" $($qtArgs -join ' ')"
     if ($LASTEXITCODE -ne 0) { throw 'qtbase configure 失败' }
 
-    Write-Host '==> 构建 Release ...'
-    cmake --build . --config Release --parallel
-    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 构建失败' }
-
+    # Debug 先构建: Debug 是 CI 上最容易失败的一环 (需 Debug CRT 等), 
+    # 先跑 Debug 可尽早暴露问题, 避免先浪费数小时编 Release 后才失败
     Write-Host '==> 构建 Debug ...'
     cmake --build . --config Debug --parallel
     if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 构建失败' }
 
-    Write-Host '==> 安装 Release ...'
-    cmake --install . --config Release
-    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 安装失败' }
+    Write-Host '==> 构建 Release ...'
+    cmake --build . --config Release --parallel
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 构建失败' }
 
     Write-Host '==> 安装 Debug ...'
     cmake --install . --config Debug
     if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 安装失败' }
+
+    Write-Host '==> 安装 Release ...'
+    cmake --install . --config Release
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 安装失败' }
 }
 finally {
     Pop-Location
@@ -235,7 +238,7 @@ $i = 2
 foreach ($c in $rest) {
     Write-Host ''
     Write-Host '=========================================================='
-    Write-Host "==> [$i/4] 编译 $c (Release + Debug)"
+    Write-Host "==> [$i/4] 编译 $c (Debug 优先)"
     Write-Host '=========================================================='
 
     $src = Join-Path $srcRoot $c
@@ -250,21 +253,21 @@ foreach ($c in $rest) {
         -DCMAKE_VERBOSE_MAKEFILE=OFF
     if ($LASTEXITCODE -ne 0) { throw "$c 配置失败" }
 
+    Write-Host "==> 构建 $c Debug (优先) ..."
+    cmake --build $build --config Debug --parallel
+    if ($LASTEXITCODE -ne 0) { throw "$c Debug 构建失败" }
+
     Write-Host "==> 构建 $c Release ..."
     cmake --build $build --config Release --parallel
     if ($LASTEXITCODE -ne 0) { throw "$c Release 构建失败" }
 
-    Write-Host "==> 构建 $c Debug ..."
-    cmake --build $build --config Debug --parallel
-    if ($LASTEXITCODE -ne 0) { throw "$c Debug 构建失败" }
+    Write-Host "==> 安装 $c Debug ..."
+    cmake --install $build --config Debug
+    if ($LASTEXITCODE -ne 0) { throw "$c Debug 安装失败" }
 
     Write-Host "==> 安装 $c Release ..."
     cmake --install $build --config Release
     if ($LASTEXITCODE -ne 0) { throw "$c Release 安装失败" }
-
-    Write-Host "==> 安装 $c Debug ..."
-    cmake --install $build --config Debug
-    if ($LASTEXITCODE -ne 0) { throw "$c Debug 安装失败" }
 
     $i++
 }
