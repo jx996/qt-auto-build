@@ -45,13 +45,66 @@ if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
     throw '未找到 cl.exe, 请确保已加载 MSVC x64 环境'
 }
 
+# ---------- 0.4 补装 VC Debug 运行时 (缺失时) ----------
+# GitHub windows 镜像的 VS 安装不含 x64 Debug CRT, 导致 Debug 配置的
+# rcc/moc/uic 工具启动即报 0xc0000135 (STATUS_DLL_NOT_FOUND), 而 Release
+# 运行时在 System32 中总是存在, 所以表现为 Release 成功、Debug 失败。
+# 这里检测 x64 Debug CRT 是否就绪, 缺失时用 VS Installer 补装运行时组件。
+# 本地机器若已装完整 VS 则直接跳过 (零开销)。
+$setup = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe'
+$vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+$vsPath = if (Test-Path $vswhere) {
+    (& $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1)
+}
+if ($vsPath) {
+    $haveDebugCrt = Get-ChildItem (Join-Path $vsPath 'VC\Redist\MSVC') -Recurse `
+        -Include vcruntime140_1d.dll, vcruntime140d.dll -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -match 'debug_nonredist\\x64' } | Select-Object -First 1
+    if (-not $haveDebugCrt) {
+        if (-not (Test-Path $setup)) { throw "缺少 setup.exe, 无法补装 VC Debug CRT: $setup" }
+        $candidates = @('Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64')
+        # 从已安装实例 catalog 补充候选 (兼容不同 VS 版本/工具集)
+        $inst = Get-ChildItem 'C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances' `
+            -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($inst) {
+            $cat = Join-Path $inst.FullName 'catalog.json'
+            if (Test-Path $cat) {
+                $catContent = Get-Content $cat -Raw
+                $candidates += [regex]::Matches($catContent,
+                    '"id"\s*:\s*"((?:Microsoft\.VisualStudio\.Component\.VC|Microsoft\.VC)\.[^"]*CRT\.(?:x64|X64)[^"]*)"') |
+                    ForEach-Object { $_.Groups[1].Value }
+            }
+        }
+        $installed = $false
+        foreach ($id in ($candidates | Select-Object -Unique)) {
+            Write-Host "==> 补装 VC Debug 运行时组件: $id"
+            & $setup modify --installPath $vsPath --add $id --quiet --norestart --wait
+            Write-Host "    setup.exe exit: $LASTEXITCODE"
+            $haveDebugCrt = Get-ChildItem (Join-Path $vsPath 'VC\Redist\MSVC') -Recurse `
+                -Include vcruntime140_1d.dll, vcruntime140d.dll -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.DirectoryName -match 'debug_nonredist\\x64' } | Select-Object -First 1
+            if ($haveDebugCrt) { $installed = $true; break }
+        }
+        if (-not $installed) {
+            Write-Warning '未能补装 x64 Debug CRT, Debug 构建可能报 0xc0000135'
+        }
+    }
+    else {
+        Write-Host "x64 Debug CRT 已就绪: $($haveDebugCrt.DirectoryName)"
+    }
+}
+else {
+    Write-Warning '未找到 VS 安装, 跳过 Debug CRT 检查'
+}
+
 # ---------- 0.5 Debug 运行时 PATH 补全 ----------
 # 编译 Debug 配置时, rcc/moc/uic 等工具需要 Debug 版 C 运行时 DLL
-# (vcruntime140d.dll / msvcp140d.dll / ucrtbased.dll)。这些 DLL 只随
-# VS/SDK 分发且默认不在 PATH 上, 缺失时工具进程启动即报 0xc0000135
-# (STATUS_DLL_NOT_FOUND), 表现为 Release 构建正常、Debug 构建失败。
+# (vcruntime140d.dll / vcruntime140_1d.dll / msvcp140d.dll / msvcp140_1d.dll /
+#  msvcp140_2d.dll / ucrtbased.dll)。这些 DLL 只随 VS/SDK 分发且默认不在
+# PATH 上, 缺失时工具进程启动即报 0xc0000135 (STATUS_DLL_NOT_FOUND),
+# 表现为 Release 构建正常、Debug 构建失败。
 # 这里在 VS/SDK 安装树内递归定位这些 DLL, 并将其所在目录加入 PATH。
-$need = @('vcruntime140d.dll', 'msvcp140d.dll', 'ucrtbased.dll')
+$need = @('vcruntime140d.dll', 'vcruntime140_1d.dll', 'msvcp140d.dll', 'msvcp140_1d.dll', 'msvcp140_2d.dll', 'ucrtbased.dll')
 
 # 1) 确定 VS 安装路径 (优先 vswhere, 兼容非默认安装位置)
 $vsRoots = @('C:\Program Files\Microsoft Visual Studio', 'C:\Program Files (x86)\Microsoft Visual Studio')
