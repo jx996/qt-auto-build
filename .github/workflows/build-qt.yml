@@ -9,6 +9,7 @@
 #
 # 触发方式:
 #   - 手动触发 (workflow_dispatch): 可指定 Qt 版本
+#   - 自动触发 (workflow_call): 由 check-qt-updates 检测到新版本时调用
 #   - 如需 push/tag 自动触发, 取消下方注释并调整策略
 # =============================================================================
 
@@ -21,6 +22,16 @@ on:
         description: 'Qt 版本号 (需为 qt.io 官方已发布版本, 留空使用默认值)'
         required: true
         default: '6.8.4'
+      publish_release:
+        description: '构建完成后是否发布 GitHub Release'
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      qt_version:
+        description: 'Qt 版本号 (需为 qt.io 官方已发布版本)'
+        type: string
+        required: true
       publish_release:
         description: '构建完成后是否发布 GitHub Release'
         type: boolean

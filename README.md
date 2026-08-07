@@ -52,6 +52,16 @@
 - 包含：`bin/`（含 Qt6Core.dll / Qt6Cored.dll 等）、`lib/`、`include/`、`mkspecs/`、`translations/`、`plugins/` 等
 - 校验：`Qt-<版本>-<工具链>-x64-Release-Debug.sha256.txt`
 
+## 自动检测 Qt 新版本
+
+`check-qt-updates` 工作流每天 02:00 UTC（北京时间 10:00）自动检查一次，也可以手动运行：
+
+1. 抓取 qt.io 官方源，解析监控版本线（默认 `6.8`）的最新补丁版本；
+2. 查询仓库 Release tag（`Qt-<版本>-msvc2022/msvc2026-*`），仅当 **两个工具链都已发布** 才视为该版本构建完成（部分失败会自动重试）；
+3. 检测到官方有新版时，自动调用 `build-qt` 完成编译 → 打包 → 发布，无需人工干预。
+
+手动检查 / 更换监控版本线：Actions → `check-qt-updates` → Run workflow，在 `qt_minor` 输入框填 `6.8` / `6.9` / `6.11` 等即可。修改定时频率：调整 `check-qt-updates.yml` 中 `schedule.cron`。
+
 ## 自定义
 
 - **更换 Qt 版本**：Run workflow 时填写 `qt_version`，或修改 `build-qt.yml` 中 `env.QT_VERSION` 默认值。

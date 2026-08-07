@@ -1,0 +1,79 @@
+# =============================================================================
+# check-qt-updates.yml —— 检测 Qt 指定版本线是否有新补丁, 有则自动编译打包发布
+#
+# 原理:
+#   1. 抓取 qt.io 官方源 <版本线>/ 目录, 解析出该线最新补丁版本
+#      (例如监控 6.8 线, 官方从 6.8.4 发布 6.8.5 时即可检测到)
+#   2. 查询本仓库已发布的 Release tag (Qt-<版本>-msvc2022/msvc2026-*),
+#      仅当两个工具链都发布过才视为"已构建完成"
+#   3. 官方最新 > 已构建完成 时, 通过 workflow_call 调用 build-qt.yml
+#      自动完成编译 / 打包 / 发布
+#
+# 触发:
+#   - schedule: 每天 02:00 UTC (北京时间 10:00) 自动检查
+#   - workflow_dispatch: 手动运行, 可指定监控的版本线 (如 6.8 / 6.9 / 6.11)
+# =============================================================================
+
+name: check-qt-updates
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      qt_minor:
+        description: '监控的 Qt 版本线 (如 6.8)'
+        type: string
+        default: '6.8'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 检查 Qt 新版本
+    runs-on: ubuntu-latest
+    outputs:
+      latest: ${{ steps.latest.outputs.version }}
+      built: ${{ steps.built.outputs.version }}
+    steps:
+      - name: 获取官方最新补丁版本
+        id: latest
+        run: |
+          MINOR="${{ inputs.qt_minor || '6.8' }}"
+          ESC=$(printf '%s' "$MINOR" | sed 's/\./\\./g')
+          VER=$(curl -s "https://download.qt.io/official_releases/qt/$MINOR/" \
+                | grep -oE "${ESC}\.[0-9]+" | sort -V | tail -1)
+          if [ -z "$VER" ]; then
+            echo "::error::无法从 qt.io 获取 $MINOR 线的最新版本"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "官方最新版本: $VER"
+
+      - name: 获取已构建完成的版本
+        id: built
+        run: |
+          MINOR="${{ inputs.qt_minor || '6.8' }}"
+          ESC=$(printf '%s' "$MINOR" | sed 's/\./\\./g')
+          TAGS=$(curl -s \
+                 -H "Authorization: Bearer ${{ github.token }}" \
+                 "https://api.github.com/repos/${{ github.repository }}/tags?per_page=100")
+          LAST="none"
+          for v in $(printf '%s' "$TAGS" | grep -oE "Qt-${ESC}\.[0-9]+-msvc(2022|2026)-" \
+                     | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | sort -Vu); do
+            c22=$(printf '%s' "$TAGS" | grep -c "Qt-$v-msvc2022-" || true)
+            c26=$(printf '%s' "$TAGS" | grep -c "Qt-$v-msvc2026-" || true)
+            if [ "$c22" -ge 1 ] && [ "$c26" -ge 1 ]; then LAST="$v"; fi
+          done
+          echo "version=$LAST" >> "$GITHUB_OUTPUT"
+          echo "已构建完成的版本: $LAST"
+
+  build:
+    name: 构建 Qt ${{ needs.check.outputs.latest }} (自动)
+    needs: check
+    # 官方最新版本与已构建版本不同 (含从未构建过的情况) 才触发
+    if: needs.check.outputs.latest != needs.check.outputs.built
+    uses: ./.github/workflows/build-qt.yml
+    with:
+      qt_version: ${{ needs.check.outputs.latest }}

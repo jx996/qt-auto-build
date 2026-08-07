@@ -45,6 +45,43 @@ if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
     throw '未找到 cl.exe, 请确保已加载 MSVC x64 环境'
 }
 
+# ---------- 0.5 Debug 运行时 PATH 补全 ----------
+# 编译 Debug 配置时, rcc/moc/uic 等工具需要 Debug 版 C 运行时 DLL
+# (vcruntime140d.dll / msvcp140d.dll / ucrtbased.dll)。这些 DLL 只存在于
+# VS 工具集 / debug redist / Windows SDK 目录中, 若不在 PATH 上,
+# 工具进程启动即报 0xc0000135 (STATUS_DLL_NOT_FOUND), 表现与已知构建失败一致。
+$runtimeDirs = @()
+foreach ($vsRoot in @('C:\Program Files\Microsoft Visual Studio', 'C:\Program Files (x86)\Microsoft Visual Studio')) {
+    Get-ChildItem $vsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        # MSVC 工具集 bin (含 vcruntime140d.dll / msvcp140d.dll)
+        Get-ChildItem "$($_.FullName)\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $runtimeDirs += "$($_.FullName)\bin\Hostx64\x64"
+        }
+        # debug_nonredist 的 DebugCRT 目录
+        Get-ChildItem "$($_.FullName)\VC\Redist\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem "$($_.FullName)\debug_nonredist\x64" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $runtimeDirs += $_.FullName
+            }
+        }
+    }
+}
+# Windows SDK 的 UCRT Debug 目录 (含 ucrtbased.dll)
+foreach ($kitRoot in @('C:\Program Files (x86)\Windows Kits\10\bin', 'C:\Program Files\Windows Kits\10\bin')) {
+    Get-ChildItem $kitRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $runtimeDirs += "$($_.FullName)\x64\ucrt"
+    }
+}
+$runtimeDirs = $runtimeDirs | Select-Object -Unique
+foreach ($d in $runtimeDirs) {
+    if (Test-Path $d) { $env:PATH = "$d;$env:PATH" }
+}
+# 诊断: 确认 Debug 运行时 DLL 可被解析
+foreach ($dll in @('vcruntime140d.dll', 'msvcp140d.dll', 'ucrtbased.dll')) {
+    $hit = $runtimeDirs | Where-Object { Test-Path (Join-Path $_ $dll) }
+    if ($hit) { Write-Host "Debug 运行时 OK: $dll -> $hit" }
+    else { Write-Warning "未找到 $dll, Debug 构建可能再次报 0xc0000135" }
+}
+
 # ---------- 1. 路径定义 ----------
 $srcRoot = Join-Path $WorkDir "$QtVersion\src"
 $installDir = Join-Path $WorkDir "$QtVersion-install\$Toolchain"
