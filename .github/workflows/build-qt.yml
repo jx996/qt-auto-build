@@ -126,7 +126,25 @@ jobs:
           path: dist/*.7z
           if-no-files-found: error
 
-      # 9. 发布到 GitHub Releases
+      # 9. 幂等清理: 同名 tag/Release 已存在时先删除, 保证同一版本可重复构建发布
+      - name: Cleanup same-name release/tag (idempotent re-run)
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        run: |
+          $tag = "Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug"
+          $api = "https://api.github.com/repos/${{ github.repository }}"
+          $rel = curl -s -H "Authorization: Bearer ${{ github.token }}" "$api/releases/tags/$tag" | ConvertFrom-Json
+          if ($rel.id) {
+            curl -s -X DELETE -H "Authorization: Bearer ${{ github.token }}" "$api/releases/$($rel.id)" | Out-Null
+            Write-Host "已删除同名 Release: $tag"
+          }
+          $ref = curl -s -H "Authorization: Bearer ${{ github.token }}" "$api/git/refs/tags/$tag" | ConvertFrom-Json
+          if ($ref.ref) {
+            curl -s -X DELETE -H "Authorization: Bearer ${{ github.token }}" "$api/git/refs/tags/$tag" | Out-Null
+            Write-Host "已删除同名 Tag: $tag"
+          }
+
+      # 10. 发布到 GitHub Releases
       - name: Publish GitHub Release
         if: ${{ inputs.publish_release }}
         uses: softprops/action-gh-release@v2

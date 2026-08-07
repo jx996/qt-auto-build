@@ -40,7 +40,9 @@ $pkgDir = Join-Path $installParent $pkgName
 if (Test-Path $pkgDir) { Remove-Item $pkgDir -Recurse -Force }
 Rename-Item $installDir $pkgDir
 
-New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+# 将 DistDir 转为绝对路径: 下方 7z 会在 Push-Location 后的目录中执行,
+# 若保持相对路径, 压缩包会被写到错误的目录 (与之前打包失败一致)
+$DistDir = (New-Item -ItemType Directory -Force -Path $DistDir).FullName
 $archive = Join-Path $DistDir "$pkgName.7z"
 
 # ---------- 2. 写入版本说明 ----------
@@ -66,8 +68,11 @@ $versionInfo | Out-File -FilePath (Join-Path $pkgDir 'version-info.txt') -Encodi
 Write-Host "==> 压缩 $pkgName ..."
 Push-Location $installParent
 try {
-    7z a $archive $pkgName -mx=9 -mmt=on | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '7z 压缩失败' }
+    $sevenOut = 7z a $archive $pkgName -mx=9 -mmt=on 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $sevenOut | Select-Object -Last 15 | ForEach-Object { Write-Host "   $_" }
+        throw "7z 压缩失败 (exit $LASTEXITCODE)"
+    }
 }
 finally {
     Pop-Location
