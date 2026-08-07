@@ -212,6 +212,12 @@ try {
     & cmd.exe /c "call `"$configure`" $($qtArgs -join ' ')"
     if ($LASTEXITCODE -ne 0) { throw 'qtbase configure 失败' }
 
+    # Ninja Multi-Config 的已知布局问题: Qt 的 DLL 输出到 bin\ (无配置后缀),
+    # 而 Debug 配置的工具输出到 bin\Debug\ (Release 工具在 bin\ 与 DLL 同目录
+    # 所以正常)。若不把 bin\ 加入 PATH, Debug 的 rcc/moc/uic 启动时找不到
+    # Qt6Cored.dll, 直接报 0xc0000135 (与本次故障完全一致)。
+    $env:PATH = "$qtbaseBuild\bin;$qtbaseBuild\bin\Debug;$qtbaseBuild\bin\Release;$env:PATH"
+
     # Debug 先构建: Debug 是 CI 上最容易失败的一环 (需 Debug CRT 等), 
     # 先跑 Debug 可尽早暴露问题, 避免先浪费数小时编 Release 后才失败
     Write-Host '==> 构建 Debug ...'
@@ -229,6 +235,9 @@ try {
             Get-ChildItem $dbgBin -Filter 'Qt6*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   DLL: $($_.Name)" }
             Get-ChildItem $dbgBin -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object { Write-Host "   EXE: $($_.Name)" }
             Get-ChildItem $dbgBin -Filter '*d.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   DLL: $($_.Name)" }
+            # bin\ (无后缀) 目录, 确认 Qt DLL 实际输出位置
+            Write-Host "--- bin\ 内容 (Qt6*.dll) ---"
+            Get-ChildItem (Join-Path $qtbaseBuild 'bin') -Filter 'Qt6*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   DLL: $($_.Name)" }
             # 对每个工具, 打印依赖并检查可解析性
             Get-ChildItem $dbgBin -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 3 | ForEach-Object {
                 Write-Host "--- $($_.Name) 的依赖 ---"
