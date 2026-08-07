@@ -1,0 +1,176 @@
+﻿# =============================================================================
+# build-qt.ps1 —— 编译并安装 Qt (仅开源组件, shared 动态链接, Release + Debug)
+#
+# 构建原理:
+#   - qtbase 使用 Qt 官方 configure.bat, 指定 -shared -debug-and-release;
+#     Qt configure 在 PATH 中发现 ninja 且为 debug-and-release 时,
+#     会自动选用 "Ninja Multi-Config" 生成器, 从而在一个构建目录中同时
+#     产出 Release 与 Debug 两个配置 (参见 qtbase configure 源码:
+#     cmake/QtProcessConfigureArgs.cmake 的 generator 自动检测逻辑)。
+#   - 其余组件 (qttools/qttranslations/qtsvg) 直接用 CMake 以
+#     "Ninja Multi-Config" + CMAKE_CONFIGURATION_TYPES=Debug;Release 配置。
+#   - 最后按 --config Release / --config Debug 分别构建并安装。
+#
+# 依赖:
+#   - 已配置好的 MSVC x64 环境 (本工程由 ilammy/msvc-dev-cmd 提供)
+#   - download-sources.ps1 已下载好的源码目录
+#   - init-tools.ps1 安装的 CMake/Ninja (本脚本也会自动补到 PATH)
+# =============================================================================
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$QtVersion,
+
+    [Parameter(Mandatory = $true)]
+    [string]$Toolchain,
+
+    [Parameter(Mandatory = $true)]
+    [string]$WorkDir,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ToolsDir
+)
+
+$ErrorActionPreference = 'Stop'
+
+# ---------- 0. 环境准备 ----------
+# 将固定版本工具加入 PATH (本进程内)
+$cmakeDir = Join-Path $ToolsDir "cmake-3.31.6"
+$ninjaDir = Join-Path $ToolsDir "ninja-1.13.2"
+$env:PATH = "$cmakeDir\bin;$ninjaDir;$env:PATH"
+
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    throw '未找到 cmake, 请先运行 init-tools.ps1'
+}
+if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
+    throw '未找到 cl.exe, 请确保已加载 MSVC x64 环境'
+}
+
+# ---------- 1. 路径定义 ----------
+$srcRoot = Join-Path $WorkDir "$QtVersion\src"
+$installDir = Join-Path $WorkDir "$QtVersion-install\$Toolchain"
+$buildRoot = Join-Path $WorkDir "$QtVersion\build-$Toolchain"
+
+$components = @('qtbase', 'qttools', 'qttranslations', 'qtsvg')
+foreach ($c in $components) {
+    if (-not (Test-Path (Join-Path $srcRoot "$c\CMakeLists.txt"))) {
+        throw "缺少组件源码: $c (请先运行 download-sources.ps1)"
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
+
+# ---------- 2. 编译 qtbase ----------
+Write-Host ''
+Write-Host '=========================================================='
+Write-Host '==> [1/4] 编译 qtbase (Release + Debug, shared)'
+Write-Host '=========================================================='
+
+$qtbaseBuild = Join-Path $buildRoot 'qtbase'
+if (Test-Path $qtbaseBuild) { Remove-Item $qtbaseBuild -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $qtbaseBuild | Out-Null
+Push-Location $qtbaseBuild
+try {
+    $configure = Join-Path $srcRoot 'qtbase\configure.bat'
+
+    # 注意: 不要在引号内拆分参数; 反斜杠结尾的目录会被 cmd 特殊处理
+    $qtArgs = @(
+        '-shared',
+        '-debug-and-release',
+        '-opensource',
+        '-confirm-license',
+        "-prefix `"$installDir`"",
+        '-nomake', 'examples',
+        '-nomake', 'tests',
+        # 捆绑第三方依赖, 保证可复现
+        '-qt-libpng', '-qt-libjpeg', '-qt-zlib', '-qt-pcre', '-qt-freetype',
+        # Windows 平台特性
+        '-schannel',
+        '-opengl', 'desktop',
+        '-platform', 'win32-msvc'
+    )
+
+    Write-Host "==> configure.bat $($qtArgs -join ' ')"
+    & cmd.exe /c "call `"$configure`" $($qtArgs -join ' ')"
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase configure 失败' }
+
+    Write-Host '==> 构建 Release ...'
+    cmake --build . --config Release --parallel
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 构建失败' }
+
+    Write-Host '==> 构建 Debug ...'
+    cmake --build . --config Debug --parallel
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 构建失败' }
+
+    Write-Host '==> 安装 Release ...'
+    cmake --install . --config Release
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Release 安装失败' }
+
+    Write-Host '==> 安装 Debug ...'
+    cmake --install . --config Debug
+    if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 安装失败' }
+}
+finally {
+    Pop-Location
+}
+
+# ---------- 3. 编译其余开源组件 ----------
+$rest = @('qttools', 'qttranslations', 'qtsvg')
+$i = 2
+foreach ($c in $rest) {
+    Write-Host ''
+    Write-Host '=========================================================='
+    Write-Host "==> [$i/4] 编译 $c (Release + Debug)"
+    Write-Host '=========================================================='
+
+    $src = Join-Path $srcRoot $c
+    $build = Join-Path $buildRoot $c
+    if (Test-Path $build) { Remove-Item $build -Recurse -Force }
+
+    # 使用 Ninja Multi-Config, 一个构建目录同时产出 Debug 和 Release
+    cmake -S $src -B $build -G 'Ninja Multi-Config' `
+        -D"CMAKE_CONFIGURATION_TYPES=Debug;Release" `
+        "-DCMAKE_PREFIX_PATH=$installDir" `
+        "-DCMAKE_INSTALL_PREFIX=$installDir" `
+        -DCMAKE_VERBOSE_MAKEFILE=OFF
+    if ($LASTEXITCODE -ne 0) { throw "$c 配置失败" }
+
+    Write-Host "==> 构建 $c Release ..."
+    cmake --build $build --config Release --parallel
+    if ($LASTEXITCODE -ne 0) { throw "$c Release 构建失败" }
+
+    Write-Host "==> 构建 $c Debug ..."
+    cmake --build $build --config Debug --parallel
+    if ($LASTEXITCODE -ne 0) { throw "$c Debug 构建失败" }
+
+    Write-Host "==> 安装 $c Release ..."
+    cmake --install $build --config Release
+    if ($LASTEXITCODE -ne 0) { throw "$c Release 安装失败" }
+
+    Write-Host "==> 安装 $c Debug ..."
+    cmake --install $build --config Debug
+    if ($LASTEXITCODE -ne 0) { throw "$c Debug 安装失败" }
+
+    $i++
+}
+
+# ---------- 4. 收尾 ----------
+# 复制 qt.conf (相对 Prefix), 使安装目录可整体搬移
+$qtConf = Join-Path $PSScriptRoot '..\config\qt.conf'
+if (Test-Path $qtConf) {
+    Copy-Item $qtConf (Join-Path $installDir 'bin\qt.conf') -Force
+}
+
+Write-Host ''
+Write-Host '=========================================================='
+Write-Host '==> 构建完成'
+Write-Host "==> 安装目录: $installDir"
+Write-Host '=========================================================='
+
+# 快速自检: shared 构建的 DLL 位于 bin/, 确认 Release 与 Debug 均已安装
+$relCore = Get-ChildItem (Join-Path $installDir 'bin') -Filter 'Qt6Core.dll' -ErrorAction SilentlyContinue
+$dbgCore = Get-ChildItem (Join-Path $installDir 'bin') -Filter 'Qt6Cored.dll' -ErrorAction SilentlyContinue
+if (-not $relCore) { throw '自检失败: 未找到 Release 版 Qt6Core.dll' }
+if (-not $dbgCore) { throw '自检失败: 未找到 Debug 版 Qt6Cored.dll' }
+Write-Host "自检通过: $($relCore.FullName)"
+Write-Host "自检通过: $($dbgCore.FullName)"

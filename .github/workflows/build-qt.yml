@@ -1,0 +1,136 @@
+# =============================================================================
+# build-qt.yml —— 从源码自动化编译 / 打包 / 发布 Qt（仅开源组件）
+#
+# 功能:
+#   - 使用 VS2022 x64 与 VS2026 x64 两个工具链矩阵并行编译
+#   - 生成 shared (动态链接) 的 Release + Debug 两个配置
+#   - 仅构建开源协议组件: qtbase / qttools / qttranslations / qtsvg
+#   - 7z 打包, 生成 SHA256 校验和, 上传 Artifact 并发布到 GitHub Releases
+#
+# 触发方式:
+#   - 手动触发 (workflow_dispatch): 可指定 Qt 版本
+#   - 如需 push/tag 自动触发, 取消下方注释并调整策略
+# =============================================================================
+
+name: build-qt
+
+on:
+  workflow_dispatch:
+    inputs:
+      qt_version:
+        description: 'Qt 版本号 (需为 qt.io 官方已发布版本, 留空使用默认值)'
+        required: true
+        default: '6.8.4'
+      publish_release:
+        description: '构建完成后是否发布 GitHub Release'
+        type: boolean
+        default: true
+# on:
+#   push:
+#     branches: [ main ]
+#     tags: [ 'qt-*' ]
+#   workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: ${{ inputs.qt_version || '6.8.4' }}
+
+jobs:
+  build-windows:
+    name: Qt ${{ env.QT_VERSION }} - ${{ matrix.vs_label }} x64 (Release+Debug)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: msvc2022
+            vs_label: MSVC2022
+            runner: windows-2022
+          - id: msvc2026
+            vs_label: MSVC2026
+            # windows-latest 目前内置 Visual Studio 2026 (v18.x);
+            # 待官方 windows-2026 稳定镜像发布后可直接改为 windows-2026
+            runner: windows-latest
+
+    steps:
+      # 1. 检出本仓库 (包含 scripts/ 与 config/)
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # 2. Python: Qt 构建过程需要
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          architecture: 'x64'
+
+      # 3. MSVC 环境 (VS2022 / VS2026 的 cl.exe、环境变量等)
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # 4. 下载固定版本的 CMake / Ninja 并加入 PATH (不依赖 runner 镜像自带版本)
+      - name: Init toolchain
+        shell: pwsh
+        run: ./scripts/init-tools.ps1 -ToolsDir "${{ runner.temp }}\tools"
+
+      # 5. 下载 4 个开源组件的源码并解压 (qtbase/qttools/qttranslations/qtsvg)
+      - name: Download Qt sources (open-source components only)
+        shell: pwsh
+        run: |
+          ./scripts/download-sources.ps1 `
+            -QtVersion "${{ env.QT_VERSION }}" `
+            -WorkDir "${{ runner.temp }}\qt" `
+            -ToolsDir "${{ runner.temp }}\tools"
+
+      # 6. 编译 + 安装 (Release 与 Debug 双配置, shared 链接)
+      - name: Build Qt (Release + Debug)
+        shell: pwsh
+        run: |
+          ./scripts/build-qt.ps1 `
+            -QtVersion "${{ env.QT_VERSION }}" `
+            -Toolchain "${{ matrix.id }}" `
+            -WorkDir "${{ runner.temp }}\qt" `
+            -ToolsDir "${{ runner.temp }}\tools"
+
+      # 7. 打包: 7z 压缩 + SHA256 校验和 + 版本说明
+      - name: Package binaries
+        shell: pwsh
+        run: |
+          ./scripts/package.ps1 `
+            -QtVersion "${{ env.QT_VERSION }}" `
+            -Toolchain "${{ matrix.id }}" `
+            -WorkDir "${{ runner.temp }}\qt" `
+            -DistDir "dist"
+
+      # 8. 上传构建产物 (Artifact)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug
+          path: dist/*.7z
+          if-no-files-found: error
+
+      # 9. 发布到 GitHub Releases
+      - name: Publish GitHub Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug
+          name: Qt ${{ env.QT_VERSION }} (${{ matrix.vs_label }} x64, Release + Debug, 开源组件)
+          body: |
+            ## 构建信息
+            - Qt 版本: ${{ env.QT_VERSION }}
+            - 工具链: ${{ matrix.vs_label }} x64
+            - 配置: shared (动态链接), Release + Debug
+            - 组件: qtbase / qttools / qttranslations / qtsvg (仅开源协议组件, LGPL-3.0/GPL-3.0)
+            - 构建日期: ${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
+            - 提交: ${{ github.sha }}
+
+            详细说明见仓库 README.md。压缩包内附 SHA256 校验和文件。
+          files: |
+            dist/*.7z
+            dist/*.txt
