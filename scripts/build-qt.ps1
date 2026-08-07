@@ -58,7 +58,9 @@ $vsPath = if (Test-Path $vswhere) {
     (& $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1)
 }
 if ($vsPath) {
-    $haveDebugCrt = Get-ChildItem (Join-Path $vsPath 'VC\Redist\MSVC') -Recurse `
+    # 只检查当前工具集 (VCToolsRedistDir) 对应的 Debug CRT, 避免旧工具集误报
+    $redistDir = if ($env:VCToolsRedistDir) { $env:VCToolsRedistDir } else { Join-Path $vsPath 'VC\Redist\MSVC' }
+    $haveDebugCrt = Get-ChildItem $redistDir -Recurse `
         -Include vcruntime140_1d.dll, vcruntime140d.dll -File -ErrorAction SilentlyContinue |
         Where-Object { $_.DirectoryName -match 'debug_nonredist\\x64' } | Select-Object -First 1
     if (-not $haveDebugCrt) {
@@ -213,8 +215,40 @@ try {
     # Debug 先构建: Debug 是 CI 上最容易失败的一环 (需 Debug CRT 等), 
     # 先跑 Debug 可尽早暴露问题, 避免先浪费数小时编 Release 后才失败
     Write-Host '==> 构建 Debug ...'
-    cmake --build . --config Debug --parallel
-    if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 构建失败' }
+    try {
+        cmake --build . --config Debug --parallel
+        if ($LASTEXITCODE -ne 0) { throw 'qtbase Debug 构建失败' }
+    }
+    catch {
+        # 失败诊断: 排查工具 (rcc/moc/uic) 无法启动 (0xc0000135) 的缺失依赖
+        Write-Host ''
+        Write-Host '=========== Debug 构建失败, 依赖诊断 ==========='
+        $dbgBin = Join-Path $qtbaseBuild 'bin\Debug'
+        if (Test-Path $dbgBin) {
+            Write-Host "--- bin\Debug 内容 (Qt6*.dll / 工具) ---"
+            Get-ChildItem $dbgBin -Filter 'Qt6*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   DLL: $($_.Name)" }
+            Get-ChildItem $dbgBin -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object { Write-Host "   EXE: $($_.Name)" }
+            Get-ChildItem $dbgBin -Filter '*d.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   DLL: $($_.Name)" }
+            # 对每个工具, 打印依赖并检查可解析性
+            Get-ChildItem $dbgBin -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 3 | ForEach-Object {
+                Write-Host "--- $($_.Name) 的依赖 ---"
+                $deps = & dumpbin /dependents $_.FullName 2>&1 | Select-String '\.dll' | ForEach-Object { $_.Line.Trim() }
+                foreach ($dep in $deps) {
+                    $name = $dep.Trim()
+                    $found = $false
+                    foreach ($d in @($dbgBin, "$env:WINDIR\System32") + $env:PATH.Split(';')) {
+                        if ($d -and (Test-Path (Join-Path $d $name))) { $found = $true; break }
+                    }
+                    Write-Host "   $name => $(if ($found) { '可解析' } else { '!!! 缺失 !!!' })"
+                }
+            }
+        }
+        else {
+            Write-Host "   (bin\Debug 目录不存在: $dbgBin)"
+        }
+        Write-Host '================================================='
+        throw
+    }
 
     Write-Host '==> 构建 Release ...'
     cmake --build . --config Release --parallel
