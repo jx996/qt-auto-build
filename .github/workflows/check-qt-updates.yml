@@ -4,7 +4,7 @@
 # 原理:
 #   1. 抓取 qt.io 官方源 <版本线>/ 目录, 解析出该线最新补丁版本
 #      (例如监控 6.8 线, 官方从 6.8.4 发布 6.8.5 时即可检测到)
-#   2. 查询本仓库已发布的 Release tag (Qt-<版本>-x64-Release-Debug,
+#   2. 查询本仓库已发布的 Release tag (Qt-<版本>-x64-shared-Release-Debug,
 #      一个 tag 含两个工具链的包), 存在即视为"已构建完成"
 #   3. 官方最新 > 已构建完成 时, 通过 workflow_call 调用 build-qt.yml
 #      自动完成编译 / 打包 / 发布
@@ -56,11 +56,12 @@ jobs:
         run: |
           MINOR="${{ inputs.qt_minor || '6.8' }}"
           ESC=$(printf '%s' "$MINOR" | sed 's/\./\\./g')
-          # 一个版本一个 tag (Qt-<版本>-x64-Release-Debug), 含两个工具链的包
+          # 一个版本一个 tag (Qt-<版本>-x64-shared-Release-Debug, shared=动态链接),
+          # 含两个工具链的包; 如后续增加 static 构建需同步调整此模式
           TAGS=$(curl -s \
                  -H "Authorization: Bearer ${{ github.token }}" \
                  "https://api.github.com/repos/${{ github.repository }}/tags?per_page=100")
-          LAST=$(printf '%s' "$TAGS" | grep -oE "Qt-${ESC}\.[0-9]+-x64-Release-Debug" \
+          LAST=$(printf '%s' "$TAGS" | grep -oE "Qt-${ESC}\.[0-9]+-x64-shared-Release-Debug" \
                  | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | sort -V | tail -1)
           echo "version=${LAST:-none}" >> "$GITHUB_OUTPUT"
           echo "已构建完成的版本: ${LAST:-none}"

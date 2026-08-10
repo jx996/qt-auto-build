@@ -47,6 +47,8 @@ permissions:
 
 env:
   QT_VERSION: ${{ inputs.qt_version || '6.8.4' }}
+  # 链接方式: shared=动态链接库 / static=静态链接库 (用于包名与发布标识)
+  LINK_TYPE: shared
 
 jobs:
   build-windows:
@@ -78,11 +80,32 @@ jobs:
           python-version: '3.13'
           architecture: 'x64'
 
-      # 3. MSVC 环境 (VS2022 / VS2026 的 cl.exe、环境变量等)
-      - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      # 3. MSVC 环境: 直接调用 VsDevCmd.bat 并导入环境
+      #    (替代第三方 action, 避免 Node 20 弃用警告)
+      - name: Setup MSVC environment (VsDevCmd)
+        shell: pwsh
+        run: |
+          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -property installationPath | Select-Object -First 1
+          if (-not $vs) { throw 'vswhere 未找到 VS 安装' }
+          $devCmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          if (-not (Test-Path $devCmd)) { throw "缺少 VsDevCmd.bat: $devCmd" }
+          Write-Host "VsDevCmd: $devCmd"
+          $lines = cmd /c "`"$devCmd`" -arch=amd64 -host_arch=amd64 && set"
+          if ($LASTEXITCODE -ne 0) { throw 'VsDevCmd 执行失败' }
+          $envFile = $env:GITHUB_ENV
+          foreach ($line in $lines) {
+            $line = $line.TrimEnd("`r")
+            if ($line -match '^([^=]+)=(.*)$') {
+              $k = $matches[1]; $v = $matches[2]
+              [Environment]::SetEnvironmentVariable($k, $v, 'Process')
+              if ($envFile) {
+                $d = 'GHENV' + [guid]::NewGuid().ToString('N')
+                "$k<<$d`n$v`n$d" | Out-File -FilePath $envFile -Append -Encoding utf8
+              }
+            }
+          }
+          Write-Host "cl.exe: $((Get-Command cl).Source)"
 
       # 4. 下载固定版本的 CMake / Ninja 并加入 PATH (不依赖 runner 镜像自带版本)
       - name: Init toolchain
@@ -108,7 +131,7 @@ jobs:
             -WorkDir "${{ runner.temp }}\qt" `
             -ToolsDir "${{ runner.temp }}\tools"
 
-      # 7. 打包: 7z 压缩 + SHA256 校验和 + 版本说明
+      # 7. 打包: 7z 压缩 + SHA256 校验和 + 版本说明 + 许可协议
       - name: Package binaries
         shell: pwsh
         run: |
@@ -116,13 +139,14 @@ jobs:
             -QtVersion "${{ env.QT_VERSION }}" `
             -Toolchain "${{ matrix.id }}" `
             -WorkDir "${{ runner.temp }}\qt" `
-            -DistDir "dist"
+            -DistDir "dist" `
+            -LinkType "${{ env.LINK_TYPE }}"
 
       # 8. 上传构建产物 (Artifact) —— 发布由下方独立的 release job 汇总
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-Release-Debug
+          name: Qt-${{ env.QT_VERSION }}-${{ matrix.id }}-x64-${{ env.LINK_TYPE }}-Release-Debug
           path: dist/*.7z
           if-no-files-found: error
 
@@ -150,7 +174,7 @@ jobs:
       - name: Cleanup same-name release/tag (idempotent re-run)
         shell: pwsh
         run: |
-          $tag = "Qt-${{ env.QT_VERSION }}-x64-Release-Debug"
+          $tag = "Qt-${{ env.QT_VERSION }}-x64-${{ env.LINK_TYPE }}-Release-Debug"
           $api = "https://api.github.com/repos/${{ github.repository }}"
           $rel = curl -s -H "Authorization: Bearer ${{ github.token }}" "$api/releases/tags/$tag" | ConvertFrom-Json
           if ($rel.id) {
@@ -163,22 +187,24 @@ jobs:
             Write-Host "已删除同名 Tag: $tag"
           }
 
-      # 3. 发布: 一个 tag, 两个工具链的包 + 校验和
+      # 3. 发布: 一个 tag, 两个工具链的包 + 校验和 (softprops v3 = node24, 无弃用警告)
       - name: Publish GitHub Release (single tag)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: Qt-${{ env.QT_VERSION }}-x64-Release-Debug
-          name: Qt ${{ env.QT_VERSION }} (x64, Release + Debug, 开源组件)
+          tag_name: Qt-${{ env.QT_VERSION }}-x64-${{ env.LINK_TYPE }}-Release-Debug
+          name: Qt ${{ env.QT_VERSION }} (${{ env.LINK_TYPE }}, x64, Release + Debug, 开源组件)
           body: |
             ## 构建信息
             - Qt 版本: ${{ env.QT_VERSION }}
+            - 链接方式: ${{ env.LINK_TYPE }} (shared=动态链接)
             - 工具链: MSVC2022 x64 + MSVC2026 x64 (两个包在同一 tag 下)
-            - 配置: shared (动态链接), Release + Debug
+            - 配置: Release + Debug
             - 组件: qtbase / qttools / qttranslations / qtsvg (仅开源协议组件, LGPL-3.0/GPL-3.0)
             - 构建日期: ${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
             - 提交: ${{ github.sha }}
 
-            包名: Qt-<版本>-msvc2022-x64-Release-Debug.7z / Qt-<版本>-msvc2026-x64-Release-Debug.7z
+            包名: Qt-<版本>-msvc2022-x64-${{ env.LINK_TYPE }}-Release-Debug.7z / Qt-<版本>-msvc2026-x64-${{ env.LINK_TYPE }}-Release-Debug.7z
+            压缩包内含 version-info.txt 与 licenses/ (LGPL/GPL 许可全文 + 商用合规说明)。
             详细说明见仓库 README.md。压缩包内附 SHA256 校验和文件。
           files: |
             artifacts/**/*.7z
