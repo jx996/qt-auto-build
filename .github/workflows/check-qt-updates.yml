@@ -63,9 +63,13 @@ jobs:
             [ -z "$M" ] && continue
             ESC=$(printf '%s' "$M" | sed 's/\./\\./g')
 
-            # 官方最新补丁版本
+            # 官方最新补丁版本 (Qt6 在 official_releases, Qt5 在 archive, 依次回退)
             LATEST=$(curl -s "https://download.qt.io/official_releases/qt/$M/" \
                      | grep -oE "${ESC}\.[0-9]+" | sort -V | tail -1)
+            if [ -z "$LATEST" ]; then
+              LATEST=$(curl -s "https://download.qt.io/archive/qt/$M/" \
+                       | grep -oE "${ESC}\.[0-9]+" | sort -V | tail -1)
+            fi
             if [ -z "$LATEST" ]; then
               echo "::warning::无法从 qt.io 获取 $M 线最新版本, 跳过该线"
               continue

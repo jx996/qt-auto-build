@@ -33,6 +33,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 按主版本分发: Qt5 (5.x) 走 qmake + jom 路径 (build-qt5.ps1), Qt6 走本文件
+if ($QtVersion.StartsWith('5.')) {
+    Write-Host '==> 检测到 Qt5 版本, 使用 Qt5 构建路径 (qmake + jom)'
+    & (Join-Path $PSScriptRoot 'build-qt5.ps1') `
+        -QtVersion $QtVersion -Toolchain $Toolchain -WorkDir $WorkDir -ToolsDir $ToolsDir
+    $qt5Code = $LASTEXITCODE
+    if ($qt5Code -ne 0) { exit $qt5Code }
+    exit 0
+}
+
 # ---------- 0. 环境准备 ----------
 # 将固定版本工具加入 PATH (本进程内)
 $cmakeDir = Join-Path $ToolsDir "cmake-3.31.6"

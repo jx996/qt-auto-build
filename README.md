@@ -6,11 +6,12 @@
 
 ## 特性
 
-- **工具链矩阵**：VS2022 x64 与 VS2026 x64 并行构建，产物自动合并发布
+- **双体系支持**：Qt5（5.15，qmake + jom）与 Qt6（Ninja Multi-Config）自动识别、各自走对应构建路径
+- **工具链矩阵**：Qt6 用 VS2022 x64 + VS2026 x64 并行构建；Qt5 仅 VS2022 x64（官方支持范围），VS2026 自动跳过
 - **双配置输出**：shared（动态链接）的 Release + Debug 一套构建搞定
 - **仅开源组件**：只构建 qtbase / qttools / qttranslations / qtsvg，无任何商业模块，可免费商用
 - **多版本自动监控**：可同时监控多条 Qt 版本线，官方发布新补丁即自动构建发布，无需人工干预
-- **可复现**：固定版本工具链（CMake + Ninja），不依赖 runner 镜像自带版本
+- **可复现**：固定版本工具链（CMake + Ninja + jom），不依赖 runner 镜像自带版本
 - **完整交付**：7z 最大压缩 + SHA256 校验和 + 许可协议全文随包分发
 
 ## 目录结构
@@ -21,9 +22,10 @@
 │   ├── build-qt.yml            # 构建/打包/发布工作流 (手动 + 自动触发)
 │   └── check-qt-updates.yml    # 多版本线监控, 检测到新版本自动触发构建
 ├── scripts/
-│   ├── init-tools.ps1          # 下载固定版本 CMake + Ninja 并加入 PATH
-│   ├── download-sources.ps1    # 下载开源组件源码 (qt.io 官方源)
-│   ├── build-qt.ps1            # configure + 编译 + 安装 (Debug 优先, 双配置)
+│   ├── init-tools.ps1          # 下载固定版本 CMake + Ninja + jom 并加入 PATH
+│   ├── download-sources.ps1    # 下载开源组件源码 (官方源, Qt5 自动回退 archive 源)
+│   ├── build-qt.ps1            # 入口: 按主版本分发 (Qt6: Ninja Multi-Config)
+│   ├── build-qt5.ps1           # Qt5 构建路径 (qmake + jom, Debug + Release)
 │   └── package.ps1             # 7z 打包 + SHA256 + 许可协议 + version-info
 ├── config/
 │   └── qt.conf                 # 相对 Prefix 配置, 使安装目录可整体搬移
@@ -58,6 +60,15 @@
 > 变量名必须与上表完全一致（区分大小写）；版本线可任意增删，例如只监控一条写 `6.8`，监控多条写 `6.8, 6.11, 6.13`。
 
 修改定时频率：调整 `check-qt-updates.yml` 中 `schedule.cron`。
+
+## Qt5 (5.15) 构建说明
+
+Qt 5.15 与 Qt6 构建体系不同，本工程自动识别主版本走对应路径（`build-qt.ps1` 入口分发）：
+
+- **源码**：Qt5 发布在 archive 区，`download-sources.ps1` 与版本检测均自动回退 archive 源
+- **构建**：qtbase 用 `configure.bat -debug-and-release` 生成工程，`jom` 一次构建 Debug + Release 双配置；qttools / qttranslations / qtsvg 用安装后的 `qmake` + `jom` + `jom install`
+- **工具链**：仅 VS2022 x64（Qt5 官方支持范围），VS2026 矩阵项在 Qt5 版本下自动跳过
+- **产物**：包名/许可协议/校验和与 Qt6 完全一致（如 `Qt-5.15.19-msvc2022-x64-shared-Release-Debug.7z`）
 
 ## 产物说明
 

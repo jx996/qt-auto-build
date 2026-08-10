@@ -67,6 +67,8 @@ jobs:
             # windows-latest 目前内置 Visual Studio 2026 (v18.x);
             # 待官方 windows-2026 稳定镜像发布后可直接改为 windows-2026
             runner: windows-latest
+            # Qt5 (5.x) 官方支持到 MSVC2019/2022, VS2026 下自动跳过该工具链
+            if: ${{ !startsWith(inputs.qt_version || '6.8.4', '5.') }}
 
     steps:
       # 1. 检出本仓库 (包含 scripts/ 与 config/)

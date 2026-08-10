@@ -30,7 +30,11 @@ $QtVersion2 = $QtVersion.Substring(0, $QtVersion.LastIndexOf('.'))
 $components = @('qtbase', 'qttools', 'qttranslations', 'qtsvg')
 
 $srcDir = Join-Path $WorkDir "$QtVersion\src"
-$baseUrl = "https://download.qt.io/official_releases/qt/$QtVersion2/$QtVersion/submodules"
+# Qt6 源码在 official_releases, Qt5 (5.15) 源码在 archive 区, 依次回退
+$baseUrls = @(
+    "https://download.qt.io/official_releases/qt/$QtVersion2/$QtVersion/submodules",
+    "https://download.qt.io/archive/qt/$QtVersion2/$QtVersion/submodules"
+)
 
 New-Item -ItemType Directory -Force -Path $srcDir | Out-Null
 
@@ -51,16 +55,19 @@ foreach ($comp in $components) {
     )
 
     $downloaded = $false
-    foreach ($candidate in $zipNames) {
-        $zipPath = Join-Path $srcDir $candidate
-        $url = "$baseUrl/$candidate"
-        Write-Host "==> 下载 $comp (尝试命名 $candidate)"
-        # -f: HTTP 404 等错误码时返回非零退出码
-        curl.exe -f -L --retry 3 -sS -o $zipPath $url
-        if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
-        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    foreach ($baseUrl in $baseUrls) {
+        foreach ($candidate in $zipNames) {
+            $zipPath = Join-Path $srcDir $candidate
+            $url = "$baseUrl/$candidate"
+            Write-Host "==> 下载 $comp : $url"
+            # -f: HTTP 404 等错误码时返回非零退出码
+            curl.exe -f -L --retry 3 -sS -o $zipPath $url
+            if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($downloaded) { break }
     }
-    if (-not $downloaded) { throw "下载失败: $comp (两种命名均已尝试)" }
+    if (-not $downloaded) { throw "下载失败: $comp (两个源与两种命名均已尝试)" }
 
     Write-Host "==> 解压 $comp ..."
     Expand-Archive -Path $zipPath -DestinationPath $srcDir -Force
