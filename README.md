@@ -2,7 +2,7 @@
 
 基于 GitHub Actions 的 **Qt 自动化编译 · 打包 · 发布** 工程。
 
-从 Qt 官方源码自动构建 Windows x64 版 Qt 库（**Release + Debug** 双配置、shared 动态链接），打包为 7z 并发布到 GitHub Releases。参考 [HelloActions-Qt](https://github.com/jaredtao/HelloActions-Qt) 与 [buildQt](https://github.com/yuanpeirong/buildQt) 的思路实现，并修正了构建流程（使用 Qt 官方支持的 Ninja Multi-Config 生成器，一个构建目录同时产出双配置）。
+从 Qt 官方源码自动构建 Windows x64 版 Qt 库（**Release + Debug** 双配置、shared 动态链接），打包为 7z 并发布到 GitHub Releases。构建采用 Qt 官方支持的 Ninja Multi-Config 生成器，一个构建目录同时产出双配置。
 
 ## 特性
 
