@@ -15,6 +15,7 @@
 #      并行调用 build-qt.yml 自动完成编译 / 打包 / 发布。
 #
 # 触发:
+#   - push: 每次推送 main 分支后自动检查
 #   - schedule: 每天 02:00 UTC (北京时间 10:00) 自动检查
 #   - workflow_dispatch: 手动运行, 可指定监控版本线队列
 # =============================================================================
@@ -22,6 +23,8 @@
 name: check-qt-updates
 
 on:
+  push:
+    branches: [ main ]
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:

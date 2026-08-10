@@ -41,7 +41,7 @@
 
 ## 自动监控多条 Qt 版本线
 
-`check-qt-updates` 每天 02:00 UTC（北京时间 10:00）自动检查一次，也可手动运行。它会：
+`check-qt-updates` 在**每次推送 main 分支后自动检查**，另每天 02:00 UTC（北京时间 10:00）定时检查一次，也可手动运行。它会：
 
 1. 遍历**监控队列**中的每条版本线，抓取 qt.io 官方源解析该线最新补丁版本；
 2. 查询仓库 Release tag（`Qt-<版本>-x64-shared-Release-Debug`），已存在即视为该版本构建完成；
@@ -89,7 +89,7 @@
 - **更换 Qt 版本**：Run workflow 时填写 `qt_version`，或修改 `build-qt.yml` 中 `env.QT_VERSION` 默认值
 - **监控版本线队列**：见上文"自动监控多条 Qt 版本线"
 - **调整编译器矩阵**：修改 `build-qt.yml` 的 `strategy.matrix`。当前 VS2026 使用 `windows-latest` 镜像（内置 VS 2026 / v18.x）；待官方 `windows-2026` 稳定镜像发布后可直接改为该值
-- **自动触发**：默认仅手动触发 + 定时监控。如需 push / tag 自动构建，取消 `build-qt.yml` 顶部注释并调整分支策略
+- **自动触发**：`check-qt-updates` 在每次推送 main 后、每天定时各自动检查一次新版本；如需 `build-qt` 本身 push / tag 自动构建，取消 `build-qt.yml` 顶部注释并调整分支策略
 - **本地调试**：在已安装 VS（含 C++ 工作负载）的 PowerShell 环境下可依次运行脚本模拟 CI 流程：
   ```powershell
   # 需先在 VS Developer PowerShell 中执行 (或 cmd: vcvarsall.bat amd64)
