@@ -31,8 +31,10 @@ on:
         type: string
         default: '6.8, 6.11'
 
+# 注意: 可复用工作流 (build-qt.yml) 的权限受调用方限制,
+# 其发布步骤需要 contents: write, 因此这里必须声明 write 而非 read
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
