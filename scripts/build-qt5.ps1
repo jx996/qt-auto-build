@@ -55,9 +55,17 @@ $srcRoot = Join-Path $WorkDir "$QtVersion\src"
 $installDir = Join-Path $WorkDir "$QtVersion-install\$Toolchain"
 $buildRoot = Join-Path $WorkDir "$QtVersion\build-$Toolchain"
 
+# Qt5 各组件源码标记: qtbase 有 configure.bat, 其余模块是 <模块名>.pro 工程
+$srcMarkers = @{
+    'qtbase'         = 'configure.bat'
+    'qttools'        = 'qttools.pro'
+    'qttranslations' = 'qttranslations.pro'
+    'qtsvg'          = 'qtsvg.pro'
+}
 foreach ($c in @('qtbase', 'qttools', 'qttranslations', 'qtsvg')) {
-    if (-not (Test-Path (Join-Path $srcRoot "$c\configure.bat"))) {
-        throw "缺少组件源码: $c (请先运行 download-sources.ps1)"
+    $marker = Join-Path $srcRoot "$c\$($srcMarkers[$c])"
+    if (-not (Test-Path $marker)) {
+        throw "缺少组件源码: $c ($marker 不存在, 请先运行 download-sources.ps1)"
     }
 }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
