@@ -49,11 +49,13 @@
 
 **监控队列的配置优先级**（逗号分隔的版本线列表，如 `<主>.<次>,<主>.<次>`）：
 
-| 方式 | 说明 |
-|---|---|
-| 手动输入 | Run workflow 时在 `qt_minors` 输入框填写队列，本次生效 |
-| 仓库变量 | Settings → Secrets and variables → Actions → Variables 新建 `QT_MINORS`，无需改代码 |
-| 默认值 | 以上都未设置时使用 `check-qt-updates.yml` 中的 `default` |
+| 方式 | 变量名 / 输入 | 取值样例 | 说明 |
+|---|---|---|---|
+| 手动输入 | `qt_minors` | `6.8, 6.11` | Run workflow 时在输入框填写队列，本次生效 |
+| 仓库变量 | `QT_MINORS` | `6.8, 6.11` | Settings → Secrets and variables → Actions → Variables 新建，无需改代码；变量名固定为 `QT_MINORS`，值用英文逗号分隔 |
+| 默认值 | — | 见 `check-qt-updates.yml` 的 `default` | 以上都未设置时生效 |
+
+> 变量名必须与上表完全一致（区分大小写）；版本线可任意增删，例如只监控一条写 `6.8`，监控多条写 `6.8, 6.11, 6.13`。
 
 修改定时频率：调整 `check-qt-updates.yml` 中 `schedule.cron`。
 
