@@ -1,17 +1,22 @@
 # =============================================================================
-# check-qt-updates.yml —— 检测 Qt 指定版本线是否有新补丁, 有则自动编译打包发布
+# check-qt-updates.yml —— 检测多条 Qt 版本线是否有新补丁, 有则自动编译打包发布
+#
+# 监控队列 (逗号分隔的版本线列表, 优先级):
+#   1. workflow_dispatch 输入 qt_minors  (手动运行时填写)
+#   2. 仓库变量 QT_MINORS              (Settings -> Secrets and variables -> Actions
+#                                       -> Variables 新建, 无需改 workflow)
+#   3. 默认值                            (本文件 default)
 #
 # 原理:
-#   1. 抓取 qt.io 官方源 <版本线>/ 目录, 解析出该线最新补丁版本
-#      (例如监控 6.8 线, 官方从 6.8.4 发布 6.8.5 时即可检测到)
+#   1. 对队列中每条版本线, 抓取 qt.io 官方源 <版本线>/ 目录解析最新补丁版本;
 #   2. 查询本仓库已发布的 Release tag (Qt-<版本>-x64-shared-Release-Debug,
-#      一个 tag 含两个工具链的包), 存在即视为"已构建完成"
-#   3. 官方最新 > 已构建完成 时, 通过 workflow_call 调用 build-qt.yml
-#      自动完成编译 / 打包 / 发布
+#      一个 tag 含两个工具链的包), 存在即视为该版本已构建完成;
+#   3. 官方最新 > 已构建完成 的版本收集为 JSON 数组, 经动态矩阵 + workflow_call
+#      并行调用 build-qt.yml 自动完成编译 / 打包 / 发布。
 #
 # 触发:
 #   - schedule: 每天 02:00 UTC (北京时间 10:00) 自动检查
-#   - workflow_dispatch: 手动运行, 可指定监控的版本线 (如 6.8 / 6.9 / 6.11)
+#   - workflow_dispatch: 手动运行, 可指定监控版本线队列
 # =============================================================================
 
 name: check-qt-updates
@@ -21,56 +26,77 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      qt_minor:
-        description: '监控的 Qt 版本线 (如 6.8)'
+      qt_minors:
+        description: '监控的 Qt 版本线队列, 逗号分隔 (如 6.8,6.11); 留空用仓库变量 QT_MINORS 或默认值'
         type: string
-        default: '6.8'
+        default: '6.8, 6.11'
 
 permissions:
   contents: read
 
 jobs:
   check:
-    name: 检查 Qt 新版本
+    name: 检查 Qt 各版本线新版本
     runs-on: ubuntu-latest
     outputs:
-      latest: ${{ steps.latest.outputs.version }}
-      built: ${{ steps.built.outputs.version }}
+      versions: ${{ steps.collect.outputs.versions }}
     steps:
-      - name: 获取官方最新补丁版本
-        id: latest
+      - name: 收集需要构建的版本
+        id: collect
         run: |
-          MINOR="${{ inputs.qt_minor || '6.8' }}"
-          ESC=$(printf '%s' "$MINOR" | sed 's/\./\\./g')
-          VER=$(curl -s "https://download.qt.io/official_releases/qt/$MINOR/" \
-                | grep -oE "${ESC}\.[0-9]+" | sort -V | tail -1)
-          if [ -z "$VER" ]; then
-            echo "::error::无法从 qt.io 获取 $MINOR 线的最新版本"
-            exit 1
-          fi
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "官方最新版本: $VER"
-
-      - name: 获取已构建完成的版本
-        id: built
-        run: |
-          MINOR="${{ inputs.qt_minor || '6.8' }}"
-          ESC=$(printf '%s' "$MINOR" | sed 's/\./\\./g')
-          # 一个版本一个 tag (Qt-<版本>-x64-shared-Release-Debug, shared=动态链接),
-          # 含两个工具链的包; 如后续增加 static 构建需同步调整此模式
+          # 监控队列: 输入 > 仓库变量 > 默认值
+          QUEUE="${{ inputs.qt_minors || vars.QT_MINORS || '6.8, 6.11' }}"
+          echo "监控队列: $QUEUE"
           TAGS=$(curl -s \
                  -H "Authorization: Bearer ${{ github.token }}" \
                  "https://api.github.com/repos/${{ github.repository }}/tags?per_page=100")
-          LAST=$(printf '%s' "$TAGS" | grep -oE "Qt-${ESC}\.[0-9]+-x64-shared-Release-Debug" \
-                 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | sort -V | tail -1)
-          echo "version=${LAST:-none}" >> "$GITHUB_OUTPUT"
-          echo "已构建完成的版本: ${LAST:-none}"
+
+          NEED_BUILD=()
+          IFS=',' read -ra LINES <<< "$QUEUE"
+          for M in "${LINES[@]}"; do
+            M=$(echo "$M" | xargs)          # 去除首尾空白
+            [ -z "$M" ] && continue
+            ESC=$(printf '%s' "$M" | sed 's/\./\\./g')
+
+            # 官方最新补丁版本
+            LATEST=$(curl -s "https://download.qt.io/official_releases/qt/$M/" \
+                     | grep -oE "${ESC}\.[0-9]+" | sort -V | tail -1)
+            if [ -z "$LATEST" ]; then
+              echo "::warning::无法从 qt.io 获取 $M 线最新版本, 跳过该线"
+              continue
+            fi
+
+            # 已构建完成的版本 (tag: Qt-<版本>-x64-shared-Release-Debug)
+            BUILT=$(printf '%s' "$TAGS" \
+                    | grep -oE "Qt-${ESC}\.[0-9]+-x64-shared-Release-Debug" \
+                    | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | sort -V | tail -1)
+
+            echo "==> 版本线 $M: 官方最新=$LATEST, 已构建=${BUILT:-none}"
+            if [ -z "$BUILT" ] || [ "$LATEST" != "$BUILT" ]; then
+              NEED_BUILD+=("$LATEST")
+            fi
+          done
+
+          if [ ${#NEED_BUILD[@]} -eq 0 ]; then
+            echo "各版本线均无新版本, 本次不触发构建"
+            echo "versions=[]" >> "$GITHUB_OUTPUT"
+          else
+            # 转为 JSON 数组供动态矩阵使用
+            JSON=$(printf '%s\n' "${NEED_BUILD[@]}" \
+                   | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
+            echo "versions=$JSON" >> "$GITHUB_OUTPUT"
+            echo "待构建版本: $JSON"
+          fi
 
   build:
-    name: 构建 Qt ${{ needs.check.outputs.latest }} (自动)
+    name: 构建 Qt ${{ matrix.version }} (自动)
     needs: check
-    # 官方最新版本与已构建版本不同 (含从未构建过的情况) 才触发
-    if: needs.check.outputs.latest != needs.check.outputs.built
+    # 有需要构建的版本才触发 (versions 为 JSON 数组)
+    if: needs.check.outputs.versions != '' && needs.check.outputs.versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.check.outputs.versions) }}
     uses: ./.github/workflows/build-qt.yml
     with:
-      qt_version: ${{ needs.check.outputs.latest }}
+      qt_version: ${{ matrix.version }}
