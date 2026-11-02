@@ -189,7 +189,17 @@ jobs:
             Write-Host "已删除同名 Tag: $tag"
           }
 
-      # 3. 发布: 一个 tag, 两个工具链的包 + 校验和 (softprops v3 = node24, 无弃用警告)
+      # 3. 真实构建时间: head_commit.timestamp 是触发提交的创建时间 (可能远早于构建),
+      #    改用本次 run 的实际开始时间 run_started_at (build-windows 为第一个 job, 即真实构建启动时间)
+      - name: Resolve real build time
+        shell: pwsh
+        run: |
+          $api = "https://api.github.com/repos/${{ github.repository }}"
+          $run = curl -s -H "Authorization: Bearer ${{ github.token }}" "$api/actions/runs/${{ github.run_id }}" | ConvertFrom-Json
+          if (-not $run.run_started_at) { throw "无法获取 run_started_at: $($run.message)" }
+          "BUILD_DATE=$($run.run_started_at)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # 4. 发布: 一个 tag, 两个工具链的包 + 校验和 (softprops v3 = node24, 无弃用警告)
       - name: Publish GitHub Release (single tag)
         uses: softprops/action-gh-release@v3
         with:
@@ -202,7 +212,7 @@ jobs:
             - 工具链: MSVC2022 x64 + MSVC2026 x64 (两个包在同一 tag 下)
             - 配置: Release + Debug
             - 组件: qtbase / qttools / qttranslations / qtsvg (仅开源协议组件, LGPL-3.0/GPL-3.0)
-            - 构建日期: ${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
+            - 构建日期: ${{ env.BUILD_DATE }}
             - 提交: ${{ github.sha }}
 
             包名: Qt-<版本>-msvc2022-x64-${{ env.LINK_TYPE }}-Release-Debug.7z / Qt-<版本>-msvc2026-x64-${{ env.LINK_TYPE }}-Release-Debug.7z
