@@ -37,6 +37,10 @@ on:
         description: '构建完成后是否发布 GitHub Release'
         type: boolean
         default: true
+    secrets:
+      DINGTALK_WEBHOOK:
+        description: '钉钉机器人 webhook 地址 (含 access_token), 未提供则跳过通知'
+        required: false
 # on:
 #   push:
 #     branches: [ main ]
