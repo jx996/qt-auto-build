@@ -61,6 +61,19 @@
 
 修改定时频率：调整 `check-qt-updates.yml` 中 `schedule.cron`。
 
+## 钉钉通知
+
+以下两种情况会向钉钉群机器人推送通知：
+
+- **检测到 Qt 新版本**：`check-qt-updates` 发现待构建版本并自动触发构建时；
+- **构建/发布失败**：`build-qt` 的编译或发布任务失败时（手动触发与自动调用均覆盖），消息附失败任务与运行链接。
+
+配置方式：在钉钉群添加**自定义机器人**，复制 webhook 地址（含 `access_token`），在仓库 **Settings → Secrets and variables → Actions → Secrets** 新建名为 `DINGTALK_WEBHOOK` 的机密，值为完整 webhook 地址。未配置时自动跳过通知，不影响构建。
+
+> 必须用 **Secret** 而非 Variable：Secret 加密存储、创建后无法读回明文、日志自动脱敏；Variable 明文可见且不脱敏，会导致地址泄露。
+
+> 机器人安全设置建议用**自定义关键词**并设为 `Qt`（所有通知均含该词）；GitHub 托管 runner 出口 IP 不固定，不要用 IP 白名单；如启用了**加签**，需额外实现签名逻辑（当前未支持）。
+
 ## Qt5 (5.15) 构建说明
 
 Qt 5.15 与 Qt6 构建体系不同，本工程自动识别主版本走对应路径（`build-qt.ps1` 入口分发）：

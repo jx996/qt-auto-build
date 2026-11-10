@@ -12,7 +12,8 @@
 #   2. 查询本仓库已发布的 Release tag (Qt-<版本>-x64-shared-Release-Debug,
 #      一个 tag 含两个工具链的包), 存在即视为该版本已构建完成;
 #   3. 官方最新 > 已构建完成 的版本收集为 JSON 数组, 经动态矩阵 + workflow_call
-#      并行调用 build-qt.yml 自动完成编译 / 打包 / 发布。
+#      并行调用 build-qt.yml 自动完成编译 / 打包 / 发布;
+#   4. 检测到新版本时推送钉钉通知 (地址由 Secret DINGTALK_WEBHOOK 控制, 未配置则跳过)。
 #
 # 触发:
 #   - push: 每次推送 main 分支后自动检查
@@ -97,6 +98,22 @@ jobs:
             echo "待构建版本: $JSON"
           fi
 
+      # 检测到新版本时推送钉钉通知 (未配置 DINGTALK_WEBHOOK 则跳过; 通知失败不阻断构建)
+      - name: '钉钉通知: 检测到 Qt 新版本'
+        if: steps.collect.outputs.versions != '' && steps.collect.outputs.versions != '[]'
+        continue-on-error: true
+        env:
+          WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "未配置 DINGTALK_WEBHOOK, 跳过钉钉通知"
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"msgtype":"text","text":{"content":"Qt 新版本检测: " + ", ".join(json.loads(sys.argv[1])) + "\n已自动触发构建: " + sys.argv[2]}}))' \
+                    '${{ steps.collect.outputs.versions }}' "$RUN_URL")
+          curl -s -X POST "$WEBHOOK" -H 'Content-Type: application/json' -d "$PAYLOAD"
+
   build:
     name: 构建 Qt ${{ matrix.version }} (自动)
     needs: check
@@ -107,5 +124,8 @@ jobs:
       matrix:
         version: ${{ fromJSON(needs.check.outputs.versions) }}
     uses: ./.github/workflows/build-qt.yml
+    # 可复用工作流默认不继承 secrets, 仅显式传递钉钉通知所需的这一个
+    secrets:
+      DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
     with:
       qt_version: ${{ matrix.version }}
