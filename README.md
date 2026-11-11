@@ -63,9 +63,10 @@
 
 ## 钉钉通知
 
-以下两种情况会向钉钉群机器人推送通知：
+以下三种情况会向钉钉群机器人推送通知：
 
 - **检测到 Qt 新版本**：`check-qt-updates` 发现待构建版本并自动触发构建时；
+- **构建发布成功**：`build-qt` 成功发布 Release 后（手动触发与自动调用均覆盖），消息附版本与 Release 链接；
 - **构建/发布失败**：`build-qt` 的编译或发布任务失败时（手动触发与自动调用均覆盖），消息附失败任务与运行链接。
 
 配置方式：在钉钉群添加**自定义机器人**，复制 webhook 地址（含 `access_token`），在仓库 **Settings → Secrets and variables → Actions → Secrets** 新建名为 `DINGTALK_WEBHOOK` 的机密，值为完整 webhook 地址。未配置时自动跳过通知，不影响构建。
